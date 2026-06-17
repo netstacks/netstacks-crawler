@@ -1,0 +1,68 @@
+#!/usr/bin/env perl
+use strict;
+use warnings;
+
+# Idempotent DB bootstrap. Acquires a Postgres advisory lock so concurrent
+# web replicas don't race on initial deploy.
+
+use DBI;
+
+my $dsn = $ENV{DATABASE_URL}
+    or die "DATABASE_URL not set\n";
+
+# Parse minimal DSN
+my ($u, $p, $h, $port, $db);
+if ($dsn =~ m{^postgres(?:ql)?://(?:([^:]+)(?::([^@]*))?@)?([^:/]+)(?::(\d+))?/([^?]+)}) {
+    ($u, $p, $h, $port, $db) = ($1, $2, $3, $4, $5);
+} else {
+    die "could not parse DATABASE_URL\n";
+}
+$port //= 5432;
+
+my $dbi = "dbi:Pg:dbname=$db;host=$h;port=$port";
+
+# Retry with backoff so a transient postgres outage / DNS hiccup doesn't turn
+# into a container restart storm (which floods Docker's resolver — see compose
+# healthcheck on the postgres service). 6 attempts ~= 30s total.
+my $dbh;
+my $last_err = '';
+for my $attempt (1 .. 6) {
+    $dbh = eval {
+        DBI->connect($dbi, $u, $p,
+            { RaiseError => 1, AutoCommit => 1, PrintError => 0 });
+    };
+    last if $dbh;
+    $last_err = $@ || $DBI::errstr || 'unknown';
+    warn "[bootstrap] db connect attempt $attempt/6 failed: $last_err\n";
+    sleep 5;
+}
+$dbh or die "cannot connect after 6 attempts: $last_err";
+
+# Advisory lock key: a stable arbitrary int
+my $LOCK_KEY = 4242421;
+my ($got) = $dbh->selectrow_array("SELECT pg_try_advisory_lock($LOCK_KEY)");
+unless ($got) {
+    warn "another bootstrap is in progress; skipping\n";
+    exit 0;
+}
+
+eval {
+    # If schema appears uninitialized, run deploy.
+    my ($exists) = $dbh->selectrow_array(
+        "SELECT 1 FROM information_schema.tables WHERE table_name = 'device' LIMIT 1"
+    );
+    if (!$exists) {
+        warn "[bootstrap] running crawler-db-deploy\n";
+        system('crawler-db-deploy') == 0
+            or die "crawler-db-deploy failed: $?";
+    } else {
+        warn "[bootstrap] schema present, skipping deploy\n";
+    }
+};
+my $err = $@;
+
+$dbh->do("SELECT pg_advisory_unlock($LOCK_KEY)");
+$dbh->disconnect;
+
+die $err if $err;
+exit 0;

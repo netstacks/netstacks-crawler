@@ -1,0 +1,4 @@
+[
+  { "vlan": 100, "description": "uplink" },
+  { "vlan": 200, "description": "wifi" }
+]

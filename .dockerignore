@@ -1,0 +1,32 @@
+.git
+.github
+.vscode
+.idea
+.netstacks
+.playwright-mcp
+.superpowers
+
+# Compose stacks aren't shipped inside the image
+docker-compose*.yml
+
+# Docs / changelogs
+docs
+*.md
+xt
+
+# Build artifacts that get re-created inside the image
+target/
+node_modules/
+web-ui/dist
+web-ui/.vite
+web-ui/test-results
+web-ui/playwright-report
+share/public/ui
+
+# Logs / OS noise
+*.log
+.DS_Store
+
+# Local-only env files
+.env
+deployment.yml

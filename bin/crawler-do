@@ -1,0 +1,604 @@
+#!/usr/bin/env perl
+
+use strict;
+use warnings;
+
+our $home;
+
+BEGIN {
+  use FindBin;
+  FindBin::again();
+
+  $home = ($ENV{CRAWLER_HOME} || $ENV{HOME});
+
+  # try to find a localenv if one isn't already in place.
+  if (!exists $ENV{PERL_LOCAL_LIB_ROOT}) {
+      use File::Spec;
+      my $localenv = File::Spec->catfile($FindBin::RealBin, 'localenv');
+      exec($localenv, $0, @ARGV) if -f $localenv;
+      $localenv = File::Spec->catfile($home, 'perl5', 'bin', 'localenv');
+      exec($localenv, $0, @ARGV) if -f $localenv;
+
+      die "Sorry, can't find libs required for App::Crawler.\n"
+        if !exists $ENV{PERLBREW_PERL};
+  }
+}
+
+BEGIN {
+  use Path::Class;
+
+  # stuff useful locations into @INC and $PATH
+  unshift @INC,
+    dir($FindBin::RealBin)->parent->subdir('lib')->stringify,
+    dir($FindBin::RealBin, 'lib')->stringify;
+}
+
+# for netdisco app config
+use App::Crawler;
+use Dancer qw/:moose :script/;
+
+use Try::Tiny;
+use Pod::Usage;
+use Scalar::Util 'blessed';
+use File::Slurper qw/read_lines read_text/;
+use NetAddr::IP qw/:rfc3021 :lower/;
+
+use App::Crawler::Backend::Job;
+use App::Crawler::JobQueue 'jq_insert';
+use App::Crawler::Util::Device 'get_device';
+
+use Getopt::Long;
+Getopt::Long::Configure ("bundling");
+
+my ($port, $extra, $debug, $quiet, $queue_only, $force, $dryrun, $rollback);
+my ($devices, $infotrace, $snmptrace, $sqltrace) = ([], 0, 0, 0);
+
+my $result = GetOptions(
+  'device|d=s@' => \$devices,
+  'port|p=s'   => \$port,
+  'extra|e=s'  => \$extra,
+  'debug|D'    => \$debug,
+  'enqueue'    => \$queue_only,
+  'force'      => \$force,
+  'dry-run'    => \$dryrun,
+  'quiet'      => \$quiet,
+  'rollback|R' => \$rollback,
+  'infotrace|I+' => \$infotrace,
+  'snmptrace|S+' => \$snmptrace,
+  'sqltrace|Q+'  => \$sqltrace,
+) or pod2usage(
+  -msg => 'error: bad options',
+  -verbose => 0,
+  -exitval => 1,
+);
+
+if ($dryrun) {
+  $ENV{ND2_WORKER_ROLL_CALL} = 1;
+  $debug = 1;
+}
+
+my $CONFIG = config();
+$CONFIG->{logger} = 'console';
+$CONFIG->{log} = ($debug ? 'debug' : ($quiet ? 'error' : 'info'));
+
+$ENV{INFO_TRACE} ||= $infotrace;
+$ENV{SNMP_TRACE} ||= $snmptrace;
+$ENV{DBIC_TRACE} ||= $sqltrace;
+$ENV{ND2_DO_FORCE} ||= $force;
+$ENV{ND2_DO_QUIET} ||= $quiet;
+$ENV{ND2_DB_ROLLBACK} ||= $rollback;
+
+# reconfigure logging to force console output
+Dancer::Logger->init('console', $CONFIG);
+
+info "App::Crawler version $App::Crawler::VERSION loaded.";
+
+# get requested action
+(my $action = shift @ARGV) =~ s/^set_//
+  if scalar @ARGV;
+
+unless ($action) {
+    pod2usage(
+      -msg => 'error: missing action!',
+      -verbose => 2,
+      -exitval => 2,
+    );
+}
+
+# create worker (placeholder object for the action runner)
+{
+  package MyWorker;
+  use Moo;
+  with 'App::Crawler::Worker::Runner';
+}
+
+# list of NetAddr::IP instances resolved from the -d params
+my @hostlist = ();
+
+sub _test_and_resolve_device {
+  my $d = shift or return;
+  $d =~ s/\s//g;
+  return unless $d;
+
+  my $net = NetAddr::IP->new($d);
+  if (!$net or $net->num == 0 or $net->addr eq '0.0.0.0') {
+      error sprintf 'unable to understand as host, IP, or prefix: %s', $d;
+      exit 1;
+  }
+
+  push @hostlist, $net->hostenum;
+  return;
+}
+
+foreach my $device (@$devices) {
+  if (scalar grep {$action eq $_} @{ setting('job_targets_prefix') }) {
+      push @hostlist, $device;
+  }
+  elsif (-f $device) {
+      debug sprintf 'opening file for reading hosts/IPs: %s', $device;
+      my @dlist = read_lines $device;
+
+      if (0 == scalar @dlist) {
+          error sprintf 'unable to read from file: %s', $device;
+          exit 2;
+      }
+
+      foreach my $entry (@dlist) {
+          _test_and_resolve_device($entry);
+      }
+  }
+  else {
+      _test_and_resolve_device($device);
+  }
+}
+
+my @job_specs = ();
+my $exitstatus =  0;
+
+if (not $force and scalar @hostlist > 512) {
+    info sprintf '%s: aborted - unwise to attempt %s jobs at once', $action, (scalar @hostlist);
+    exit 1;
+}
+
+if ($action =~ m/^(?:cf_|macsuck|arpnip)/ and $extra) {
+    if ($extra eq '@-' or ($quiet and $extra eq '-')) {
+        $extra = do { local $/; <STDIN> };
+    }
+    elsif ($extra =~ m/^@(.+)/) {
+        my $filename = $1;
+        if (-f $filename) {
+            $extra = read_text($filename);
+        }
+        else {
+            error sprintf 'unable to read from file: %s', $filename;
+            exit 2;
+        }
+    }
+}
+
+# some actions do not take a device parameter
+@hostlist = (undef) if 0 == scalar @hostlist;
+
+foreach my $host (@hostlist) {
+  push @job_specs, {
+    action => $action,
+    device => ref $host ? $host->addr : $host,
+    port   => $port,
+    subaction => $extra,
+    username => ($ENV{USER} || 'crawler-do'),
+  };
+}
+
+if ($queue_only) {
+  jq_insert( \@job_specs );
+  info sprintf '%s: queued %s jobs at %s',
+    $action, (scalar @job_specs), scalar localtime;
+}
+else {
+  foreach my $spec (@job_specs) {
+    my $worker = MyWorker->new();
+    my $job = App::Crawler::Backend::Job->new({ job => 0, %$spec });
+    $CONFIG->{$1."_min_age"} = 0 if $job->action =~ m/^(arpnip|macsuck|discover)$/;
+    $CONFIG->{ignore_layers} = 'group:__ANY__' if $force;
+
+    my $actiontext = (
+      ($job->device ? ('['.$job->device.']') : '') .
+      ($job->action eq 'show' ? ('/'. ($job->subaction || 'interfaces')) : '')
+    );
+
+    # do job
+    try {
+      info sprintf '%s: %s started at %s',
+        $action, $actiontext, scalar localtime;
+      $worker->run($job);
+    }
+    catch {
+      $job->status('error');
+      $job->log("error running job: $_");
+    };
+
+    if ($job->log eq 'failed to report from any worker!' and not $job->only_namespace) {
+      pod2usage(
+        -msg => (sprintf 'error: %s is not a valid action (no worker status recorded)', $action),
+        -verbose => 2,
+        -exitval => 3,
+      );
+    }
+
+    info sprintf '%s: finished at %s', $action, scalar localtime;
+    info sprintf '%s: status %s: %s', $action, $job->status, $job->log;
+    $exitstatus = 1 if !$exitstatus and $job->status ne 'done';
+  }
+}
+
+exit $exitstatus;
+
+=encoding UTF-8
+
+=head1 NAME
+
+crawler-do - Run any NetStacks Crawler job from the command-line.
+
+=head1 SYNOPSIS
+
+ ~/bin/crawler-do <action> [-DISQR] [--enqueue] [--force] [--quiet] [-d <device> [-p <port>] [-e <extra>]]
+
+=head1 DESCRIPTION
+
+This program runs any crawler poller job from the command-line. The SPA's
+Admin → Actions page is the preferred surface; this CLI exists for incident
+response and headless operations.
+
+=head1 ACTIONS
+
+Note that some jobs (C<discoverall>, C<macwalk>, C<arpwalk>, C<nbtwalk>)
+simply add entries to the Netdisco job queue for other jobs, so won't seem
+to do much when you trigger them. Everything else happens in real-time.
+
+However the "C<--enqueue>" option will force the queueing of the job,
+regardless of type. This may be useful for cron-driven actions, or for actions
+working across large IP spaces. Netdisco will refuse to queue more than 512
+jobs at once unless you also add the "C<--force>" option.
+
+For any action, if you wish to run one of its individual worker stages, then
+pass C<action::stage> as the first argument to C<crawler-do>, for example
+C<discover::neighbors>.
+
+Any action taking a C<device> parameter can be passed either a hostname or IP
+address of any interface of a known or unknown device, or an IP prefix
+(subnet) which will cause C<crawler-do> to run the action on all addresses in
+that range. The C<device> parameter may also be a filename that Netdisco will
+open to read hostnames, IPs, or prefixes, one per line.
+
+The C<device> parameter may be passed multiple times. In this case, all
+addresses (after expanding IP Prefixes) will be handled one by one.
+
+=head2 discover
+
+Run a discover on the device (specified with C<-d>).
+
+ ~/bin/crawler-do discover -d 192.0.2.1
+
+Run a discover on two different devices (specified with C<-d>).
+
+ ~/bin/crawler-do discover -d 192.0.2.1 -d 192.15.2.95
+
+=head2 discoverall
+
+Queue a discover for all known devices.
+
+=head2 pingsweep
+
+Scan an IP prefix (subnet) using ping utility (must be installed), any
+host responding has a C<discover> job queued. It is recommended to queue
+the C<pingsweep> job as well.
+
+ ~/bin/crawler-do pingsweep -d 192.0.2.0/24 --enqueue
+
+The default ping timeout is 0.1 seconds. To change this, pass any number
+to the C<-e> parameter.
+
+=head2 macsuck
+
+Run a macsuck on the device (specified with C<-d>).
+
+ ~/bin/crawler-do macsuck -d 192.0.2.1
+
+Submit macsuck data directly to Netdisco in JSON format (see API web
+docs for data format example):
+
+ # pipe to standard input
+ ~/bin/crawler-do macsuck -d 192.0.2.1 -e '@-'
+ # read from a file
+ ~/bin/crawler-do macsuck -d 192.0.2.1 -e '@/tmp/mac-address-table.json'
+ # pass directly
+ ~/bin/crawler-do macsuck -d 192.0.2.1 -e '[{"ip": "string", "mac": "string", "dns": "string"}]'
+
+=head2 macwalk
+
+Queue a macsuck for all known devices.
+
+=head2 arpnip
+
+Run an arpnip on the device (specified with C<-d>).
+
+ ~/bin/crawler-do arpnip -d 192.0.2.1
+
+Submit arpnip data directly to Netdisco in JSON format (see API web
+docs for data format example):
+
+ # pipe to standard input
+ ~/bin/crawler-do arpnip -d 192.0.2.1 -e '@-'
+ # read from a file
+ ~/bin/crawler-do arpnip -d 192.0.2.1 -e '@/tmp/mac-address-table.json'
+ # pass directly
+ ~/bin/crawler-do arpnip -d 192.0.2.1 -e '[{"ip": "string", "mac": "string", "dns": "string"}]'
+
+=head2 arpwalk
+
+Queue an arpnip for all known devices.
+
+=head2 delete
+
+Delete a device (specified with C<-d>). Pass a log message for the action in
+the C<-e> parameter. Optionally request for associated nodes to be archived
+(rather than deleted) by setting the C<-p> parameter to "C<yes>" (mnemonic:
+B<p>reserve).
+
+ ~/bin/crawler-do delete -d 192.0.2.1
+ ~/bin/crawler-do delete -d 192.0.2.1 -e 'older than the sun'
+ ~/bin/crawler-do delete -d 192.0.2.1 -e 'older than the sun' -p yes
+
+=head2 renumber
+
+Change the canonical IP address of a device (specified with C<-d>). Pass the
+new IP address in the C<-e> parameter. All related records such as topology,
+log and node information will also be updated to refer to the new device.
+
+Note that I<no> check is made as to whether the new IP is reachable for future
+polling.
+
+ ~/bin/crawler-do renumber -d 192.0.2.1 -e 192.0.2.254
+
+=head2 nbtstat
+
+Run an nbtstat on the node (specified with C<-d>).
+
+ ~/bin/crawler-do nbtstat -d 192.0.2.2
+
+=head2 nbtwalk
+
+Queue an nbtstat for all known nodes.
+
+=head2 Custom Field update
+
+Update a Device or Device Port custom field using `crawler-do`. Specify
+the field name as the "action" prefixed with `cf_`. The content can be
+passed in the command, or taken from a file, or from standard input.
+
+ # pass directly
+ ~/bin/crawler-do cf_myfield --enqueue -d 192.0.2.1 -e 'field value'
+ # pipe from standard input
+ ~/bin/crawler-do cf_myfield --enqueue -d 192.0.2.1 -e '@-'
+ # read from a file
+ ~/bin/crawler-do cf_myfield --enqueue -d 192.0.2.1 -e '@/tmp/myfield'
+
+Note that `--enqueue ` is *required* for the feature to work. The change
+is, however, applied instanty in the database when `crawler-do` runs.
+
+=head2 expire
+
+Run Device and Node expiry actions according to configuration.
+
+=head2 expirenodes
+
+Archive nodes on the specified device. If you want to delete nodes, set the
+C<-e> parameter to "C<no>" (mnemonic: B<e>xpire). If you want to perform the
+action on a specific port, set the C<-p> parameter.
+
+ ~/bin/crawler-do expirenodes -d 192.0.2.1
+ ~/bin/crawler-do expirenodes -d 192.0.2.1 -p FastEthernet0/1 -e no
+
+=head2 graph
+
+Generate GraphViz graphs for the largest cluster of devices.
+
+You'll need to install the L<Graph::Undirected> and L<GraphViz> Perl modules,
+and possibly also the C<graphviz> utility for your operating system. Also
+create a directory for the output files.
+
+ mkdir ~/graph
+ ~/bin/localenv cpanm Graph::Undirected
+ ~/bin/localenv cpanm GraphViz
+
+=head2 show
+
+Dump the content of an SNMP MIB Object or an L<SNMP::Info> method, useful for
+diagnostics and troubleshooting.
+
+You should provide the "C<-e>" option which is the name of the method or
+object, such as C<interfaces> or C<uptime> or C<ifDescr>.
+
+If you wish to specify the SNMP MIB to load and find the Object in, then
+you can qualify the "C<-e>" parameter, such as C<IF-MIB::ifDescr>.
+
+If you wish to test with a specific L<SNMP::Info> device class other than the
+one discovered, pass this in the "C<-p>" parameter, such as C<Layer3> or
+C<SNMP::Info::Layer3> (the C<SNMP::Info> prefix is optional).
+
+All "C<-e>" parameters are case sensitive.
+
+ ~/bin/crawler-do show -d 192.0.2.1 -e interfaces
+ ~/bin/crawler-do show -d 192.0.2.1 -e IF-MIB::ifDescr
+ ~/bin/crawler-do show -d 192.0.2.1 -e interfaces -p SNMP::Info::Layer2::HP
+ ~/bin/crawler-do show -d 192.0.2.1 -e ifName -p Layer3::Arista
+
+The "C<-e>" parameter C<specify> will show the used configuration for the
+specified device.
+
+ ~/bin/crawler-do show -d 192.0.2.1 -e specify
+
+Passing the "C< --quiet >" command line flag will cause C<show> to return
+data in a compact JSON format (suitable for piping to C<jq>, for example).
+
+If the output is very long, you may see a "skipping..." message. Work
+around this by passing "C< --quiet >" and then pipe the output to
+"C<jq .>".
+
+This command works well with the "C<-I>" debug flag on L<SNMP::Info> (or
+"C<-II>").
+
+=head2 psql
+
+Start an interactive terminal with the Netdisco PostgreSQL database. If you
+pass an SQL statement in the C<-e> option then it will be executed.
+
+ ~/bin/crawler-do psql
+ ~/bin/crawler-do psql -e 'SELECT ip, dns FROM device'
+ ~/bin/crawler-do psql -e 'COPY (SELECT ip, dns FROM device) TO STDOUT WITH CSV HEADER'
+
+=head2 stats
+
+Updates Netdisco's statistics on number of devices, nodes, etc, for today.
+
+=head2 location
+
+Set the SNMP location field on the device (specified with C<-d>). Pass the
+location string in the C<-e> extra parameter. Use C<--force> to bypass
+user access controls.
+
+ ~/bin/crawler-do location -d 192.0.2.1 -e 'wiring closet'
+
+=head2 contact
+
+Set the SNMP contact field on the device (specified with C<-d>). Pass the
+contact name in the C<-e> extra parameter. Use C<--force> to bypass
+user access controls.
+
+ ~/bin/crawler-do contact -d 192.0.2.1 -e 'tel: 555-2453'
+
+=head2 portname
+
+Set the description on a device port. Requires the C<-d> parameter (device),
+C<-p> parameter (port), and C<-e> parameter (description). Use C<--force> to
+bypass user access controls.
+
+ ~/bin/crawler-do portname -d 192.0.2.1 -p FastEthernet0/1 -e 'Web Server'
+
+=head2 portcontrol
+
+Set the up/down status on a device port. Requires the C<-d> parameter
+(device), C<-p> parameter (port), and C<-e> parameter ("up" or "down").
+Use C<--force> to bypass user access controls.
+
+ ~/bin/crawler-do portcontrol -d 192.0.2.1 -p FastEthernet0/1 -e up
+ ~/bin/crawler-do portcontrol -d 192.0.2.1 -p FastEthernet0/1 -e down
+
+=head2 vlan
+
+Set the native VLAN on a device port. Requires the C<-d> parameter (device),
+C<-p> parameter (port), and C<-e> parameter (VLAN number). Use C<--force> to
+bypass user access controls.
+
+ ~/bin/crawler-do vlan -d 192.0.2.1 -p FastEthernet0/1 -e 102
+
+=head2 power
+
+Set the PoE on/off status on a device port. Requires the C<-d> parameter
+(device), C<-p> parameter (port), and C<-e> parameter ("on" or "off").
+Use C<--force> to bypass user access controls.
+
+ ~/bin/crawler-do power -d 192.0.2.1 -p FastEthernet0/1 -e on
+ ~/bin/crawler-do power -d 192.0.2.1 -p FastEthernet0/1 -e off
+
+=head2 makerancidconf
+
+Generates rancid configuration for known devices. See
+L<App::Crawler::Worker::Plugin::MakeRancidConf> for configuration needs.
+
+ ~/bin/crawler-do makerancidconf
+
+=head2 getapikey
+
+Generates an API key for the supplied username. See the 
+L<API doc|https://github.com/netdisco/netdisco/wiki/API> for further 
+information.
+
+ ~/bin/crawler-do getapikey -e the_username 
+
+=head2 dumpconfig
+
+Will dump the loaded and parsed configuration for the application. Pass a
+specific configuration setting name to the C<-e> parameter to dump only that.
+
+Some configuration items like device_auth are evaluated against the ACL first.
+Pass a device in C<-d> to display them:
+
+ ~/bin/crawler-do dumpconfig -d 192.0.2.1 -e device_auth
+
+=head2 loadmibs
+
+A requirement for web browsing of SNMP data (see C<snapshot> command), run
+this to load Netdisco MIBs into the database. It only needs to be done once.
+
+=head2 snapshot
+
+Builds and saves a data structure which Netdisco can use to mimic the device
+(if shared) and also browse the SNMP Objects in the web.
+
+By default the command will gather Objects which can be downloaded from the
+web under Device Details tab. This allows another user to mimic your device.
+
+If you previously ran the C<loadmibs> action before running this action,
+the Objects also become browsable in the web (under Device SNMP tab).
+
+Normally the SNMP Objects are all gathered from C<.1> root but you can use
+C<-e> parameter to change this.
+
+=head2 addpseudodevice
+
+Adds a Pseudo Device which can be used to connect together unconnected parts
+of your network or to gather ARP via CLI/API when SNMP is not available.
+
+Pass the Pseudo Device IP in the L<-d> parameter. Pass the Pseudo Device name
+in the L<-e> parameter. Pass the number of ports (one or more) in the L<-p>
+parameter. All parameters are required. For example:
+
+ ~/bin/crawler-do addpseudodevice -d 192.0.2.1 -e fakerouter -p 10
+
+=head1 DEBUG OPTIONS
+
+The flag "C<-R>" will cause any changes to the database to be rolled back
+at the end of the action.
+
+The flags "C<-DISQ>" can be specified, multiple times, and enable the
+following items in order:
+
+=over 4
+
+=item C<-D>
+
+Netdisco debug log level.
+
+=item C<-I> or C<-II>
+
+L<SNMP::Info> trace level (1 or 2).
+
+=item C<-S> or C<-SS> or C<-SSS>
+
+L<SNMP> (net-snmp) trace level (1, 2 or 3).
+
+=item C<-Q>
+
+L<DBIx::Class> trace enabled.
+
+=back
+
+In case of issues with the colored output, setting the environment variable
+C<ANSI_COLORS_DISABLED> or C<NO_COLOR> can be used to suppress it.
+
+The C<< --dry-run >> option can be provided to show the workers that will run
+without actually executing their content. Setting the C<ND2_WORKER_ROLL_CALL>
+environment variable does the same thing.
+
+=cut

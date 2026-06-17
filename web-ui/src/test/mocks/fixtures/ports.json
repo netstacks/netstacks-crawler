@@ -1,0 +1,5 @@
+[
+  { "port": "Gi1/0/1", "up": "up", "up_admin": "up", "speed": "1G", "vlan": 100, "name": "Uplink", "remote_id": "10.0.0.2", "remote_port": "Gi1/0/24" },
+  { "port": "Gi1/0/2", "up": "up", "up_admin": "up", "speed": "1G", "vlan": 200, "name": "AP lobby east", "remote_id": null, "remote_port": null },
+  { "port": "Gi1/0/3", "up": "down", "up_admin": "down", "speed": null, "vlan": 1, "name": null, "remote_id": null, "remote_port": null }
+]

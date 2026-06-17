@@ -1,0 +1,15 @@
+FROM node:20-bookworm AS spa-build
+WORKDIR /build
+COPY web-ui/package.json web-ui/package-lock.json ./
+RUN npm ci
+COPY web-ui .
+RUN npm run build -- --outDir /spa
+
+FROM nginx:stable
+COPY --from=spa-build /spa /usr/share/nginx/html
+COPY nginx.conf /etc/nginx/conf.d/default.conf
+
+EXPOSE 5000
+
+HEALTHCHECK --interval=15s --timeout=3s --retries=4 \
+  CMD curl -fsS http://127.0.0.1:5000/health || exit 1

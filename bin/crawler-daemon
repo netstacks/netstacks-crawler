@@ -1,0 +1,23 @@
+#!/usr/bin/env perl
+
+use strict;
+use warnings;
+
+use FindBin;
+FindBin::again();
+
+use File::Spec;
+use Cwd 'realpath';
+use File::Copy 'move';
+
+my $me = realpath(File::Spec->catfile($FindBin::RealBin, $FindBin::RealScript));
+my $uid = (stat($me))[4] || 0;
+my $home = ($ENV{CRAWLER_HOME} || (getpwuid($uid))[7] || $ENV{HOME});
+
+my $old_pid = File::Spec->catfile($home, 'crawler-daemon.pid');
+my $new_pid = File::Spec->catfile($home, 'crawler-backend.pid');
+if (-f $old_pid) { move( $old_pid, $new_pid ) }
+
+my $backend =
+  File::Spec->catfile((File::Spec->splitpath( $me ))[1], 'crawler-backend');
+exec {$backend} 'crawler-backend', @ARGV;

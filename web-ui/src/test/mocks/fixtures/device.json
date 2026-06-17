@@ -1,0 +1,1 @@
+{ "ip": "10.0.0.1", "name": "core-sw-01", "dns": "core-sw-01.dc1", "vendor": "cisco", "model": "Catalyst 9300", "os": "IOS-XE 17.3.5", "location": "Bldg-A / DC1" }

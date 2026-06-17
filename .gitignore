@@ -1,0 +1,61 @@
+# -- Perl build / dist artifacts --
+Build
+_build/
+blib/
+MYMETA.*
+MANIFEST.*
+Makefile*
+*.tar.gz
+*.swp
+*.pid
+test.pl
+
+# -- Editor / IDE --
+.idea/
+.vscode/
+*.komodo*
+.stylelintrc
+
+# -- Python --
+*__pycache__*
+.ruff_cache/
+uv.lock
+
+# -- Node / web-ui --
+node_modules/
+yarn.lock
+web-ui/src/**/*.js
+web-ui/*.tsbuildinfo
+web-ui/dist/
+web-ui/test-results/
+web-ui/playwright-report/
+web-ui/.vite/
+
+# -- Built SPA artifacts (baked into docker image at build time) --
+share/public/ui/
+
+# -- Runtime / dev artifacts --
+.env
+/deployment.yml
+/package-lock.json
+.netstacks/
+.superpowers/
+# Local AI-assistant / scratch / session artifacts (dev-only)
+/.claude/
+/Context
+*.bak
+/plan*.md
+
+# -- macOS / cross-platform --
+.DS_Store
+Thumbs.db
+
+# -- Playwright MCP working dir + ad-hoc dev screenshots at repo root --
+/.playwright-mcp/
+/*.png
+
+# -- Allow docker hooks dir which would otherwise be hidden by other rules --
+!.docker/hooks/*
+
+# Local dev compose override (bind-mounts source for fast Perl iteration)
+docker-compose.override.yml

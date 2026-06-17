@@ -1,0 +1,8 @@
+# Test environment configuration
+# Enables endpoints that are off by default so tests can verify
+# API-side routes remain reachable when web_ui is disabled.
+health_path: '/health'
+metrics_path: '/metrics'
+workers:
+  queue: 'PostgreSQL'
+  tasks: 1

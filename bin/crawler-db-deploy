@@ -1,0 +1,164 @@
+#!/usr/bin/env perl
+
+use strict;
+use warnings;
+
+our $home;
+
+BEGIN {
+  use FindBin;
+  FindBin::again();
+
+  $home = ($ENV{CRAWLER_HOME} || $ENV{HOME});
+
+  # try to find a localenv if one isn't already in place.
+  if (!exists $ENV{PERL_LOCAL_LIB_ROOT}) {
+      use File::Spec;
+      my $localenv = File::Spec->catfile($FindBin::RealBin, 'localenv');
+      exec($localenv, $0, @ARGV) if -f $localenv;
+      $localenv = File::Spec->catfile($home, 'perl5', 'bin', 'localenv');
+      exec($localenv, $0, @ARGV) if -f $localenv;
+
+      die "Sorry, can't find libs required for App::Crawler.\n"
+        if !exists $ENV{PERLBREW_PERL};
+  }
+}
+
+BEGIN {
+  use Path::Class;
+
+  # stuff useful locations into @INC and $PATH
+  unshift @INC,
+    dir($FindBin::RealBin)->parent->subdir('lib')->stringify,
+    dir($FindBin::RealBin, 'lib')->stringify;
+
+  use Config;
+  $ENV{PATH} = $FindBin::RealBin . $Config{path_sep} . $ENV{PATH};
+}
+
+use App::Crawler;
+use Dancer ':script';
+use Dancer::Plugin::DBIC 'schema';
+
+use Try::Tiny;
+
+=head1 NAME
+
+crawler-db-deploy - Database deployment for Netdisco
+
+=head1 USAGE
+
+This script upgrades or initialises a Netdisco database schema.
+
+ ~/bin/crawler-db-deploy [--redeploy-all]
+
+This script connects to the database and runs without user interaction. If
+there's no Nedisco schema, it is deployed. If there's an unversioned schema
+then versioning is added, and updates applied.  Otherwise only necessary
+updates are applied to an already versioned schema.
+
+Pre-existing requirements are that there's a working database connection and a
+user with rights to create tables in that database. These settings are defined
+in your environment YAML file (default C<~/environments/deployment.yml>).
+
+If you wish to force the redeployment of all database configuration, pass the
+C<--redeploy-all> argument on the command line. This will reset your database
+version so the database scripts will run again, but no data will be deleted
+other than what's done via the upgrade scripts.
+
+For more database info see the
+L<netdisco wiki|https://github.com/netdisco/netdisco/wiki/Database-Tips>.
+
+=head1 VERSIONS
+
+=over 4
+
+=item *
+
+Version 1 is a completely empty database schema with no tables
+
+=item *
+
+Version 2 is the "classic" Netdisco database schema as of Netdisco 1.1
+
+=item *
+
+Versions 5 to 16 add patches for Netdisco 1.2
+
+=item *
+
+Version 17 onwards deploys schema upgrades for Netdisco 2
+
+=back
+
+=cut
+
+my $schema = schema('netdisco');
+my $pg_ver = $schema->storage->dbh->{pg_server_version};
+
+if ($pg_ver and $pg_ver < 90600) {
+    printf "\nFATAL: minimum PostgreSQL version for Netdisco is 9.6, you have %s\n",
+      (join '.', reverse map {scalar reverse} unpack("(A2)*", reverse $pg_ver));
+    print "\nUnfortunately, if you are reading this, you already upgraded Netdisco,";
+    print "\nso your only options now are to delete and reinstall Netdisco, or upgrade";
+    print "\nyour PostgreSQL installation.\n";
+    print "\nPlease always read the Release Notes before upgrading:";
+    print "\nhttps://github.com/netdisco/netdisco/wiki/Release-Notes\n";
+    die "\n";
+}
+
+if (scalar @ARGV and $ARGV[0] and $ARGV[0] eq '--redeploy-all') {
+    $schema->storage->dbh_do(
+      sub {
+        my ($storage, $dbh, @args) = @_;
+        $dbh->do('DROP TABLE dbix_class_schema_versions');
+      },
+    );
+}
+
+# installs the dbix_class_schema_versions table with version "1"
+# which corresponds to an empty schema
+if (not $schema->get_db_version) {
+    $schema->install(1);
+    $schema->storage->disconnect;
+}
+
+# test for existing schema at public release version, set v=2 if so
+try {
+    $schema->storage->dbh_do(sub {
+      my ($storage, $dbh) = @_;
+      $dbh->selectrow_arrayref("SELECT * FROM device WHERE 0 = 1");
+    });
+
+    $schema->_set_db_version({version => 2})
+      if $schema->get_db_version == 1;
+    $schema->storage->disconnect;
+};
+
+# roll everything back if we're testing
+my $txn_guard = $ENV{ND2_DB_ROLLBACK}
+  ? schema('netdisco')->storage->txn_scope_guard : undef;
+
+# upgrade from whatever dbix_class_schema_versions says, to $VERSION
+# except that get_db_version will be 0 at first deploy
+my $db_version = ($schema->get_db_version || 1);
+my $target_version = $schema->schema_version;
+
+# one step at a time, in case user has applied local changes already
+for (my $i = $db_version; $i < $target_version; $i++) {
+    my $next = $i + 1;
+    try {
+        $schema->upgrade_single_step($i, $next);
+    }
+    catch {
+        warn "Error: $_"
+          if $_ !~ m/(does not exist|already exists)/;
+
+        # set row in dbix_class_schema_versions table
+        $schema->_set_db_version({version => $next})
+          if $schema->get_db_version < $next;
+    };
+}
+
+undef $txn_guard if $ENV{ND2_DB_ROLLBACK};
+exit 0;

@@ -1,0 +1,43 @@
+[project]
+name = "netdisco"
+version = "1.0.0"
+description = "Python code and dependencies for Netdisco"
+authors = [{ name = "Netdisco Developers" }]
+requires-python = ">=3.9"
+dependencies = [
+    "yamllint>=1.35.1,<2",
+    "yamale>=5.2.1,<6",
+    "netmiko>=4.4.0,<5",
+    "cryptography>=43.0.1,<44",
+    "virtualenv>=20.26.6",
+    "sqlalchemy>=2.0.37,<3",
+    "psycopg>=3.2.4,<4",
+    "uv-build>=0.9.4,<0.10.0",
+]
+
+[project.scripts]
+run_worklet = "netdisco.runner:main"
+
+[build-system]
+requires = ["uv_build>=0.9.4,<0.10.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+develop = ["pre-commit>=3.7.1,<4"]
+test = ["ruff>=0.5.4,<0.6"]
+
+[tool.uv]
+default-groups = [
+    "develop",
+    "test",
+]
+link-mode = "copy"
+
+[tool.pytest.ini_options]
+addopts = [
+    "--import-mode=importlib",
+]
+
+[tool.uv.build-backend]
+module-name = "netdisco"
+module-root = ""

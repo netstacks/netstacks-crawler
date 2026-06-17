@@ -1,0 +1,106 @@
+@import "tailwindcss";
+
+@source "./**/*.{js,ts,jsx,tsx}";
+
+@theme {
+  /* NetStacks Admin Theme - Based on Terminal/VS Code */
+
+  /* Background colors */
+  --color-bg-primary: #1e1e1e;
+  --color-bg-secondary: #252526;
+  --color-bg-tertiary: #2d2d30;
+  --color-bg-hover: #3c3c3c;
+  --color-bg-active: #094771;
+
+  /* Border colors */
+  --color-border: #3c3c3c;
+  --color-border-active: #007acc;
+
+  /* Text colors */
+  --color-text-primary: #cccccc;
+  --color-text-secondary: #8c8c8c;
+  --color-text-accent: #4fc1ff;
+  --color-text-muted: #6e6e6e;
+
+  /* Accent colors */
+  --color-accent: #007acc;
+  --color-accent-hover: #1c97ea;
+
+  /* Primary button fill — quieter than --color-text-accent so big surfaces
+     (Run / Save / Apply buttons) don't burn the user's retinas. */
+  --color-button-primary:       #3b82f6;
+  --color-button-primary-hover: #2563eb;
+
+  /* Status colors */
+  --color-success: #4ec9b0;
+  --color-warning: #dcdcaa;
+  --color-error: #f14c4c;
+  --color-info: #4fc1ff;
+
+  /* Font families */
+  --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+  --font-mono: 'SF Mono', Monaco, 'Cascadia Code', Consolas, monospace;
+
+  /* Animations for accordion */
+  --animate-accordion-down: accordion-down 0.2s ease-out;
+  --animate-accordion-up: accordion-up 0.2s ease-out;
+
+  @keyframes accordion-down {
+    from { height: 0; }
+    to { height: var(--radix-accordion-content-height); }
+  }
+
+  @keyframes accordion-up {
+    from { height: var(--radix-accordion-content-height); }
+    to { height: 0; }
+  }
+}
+
+/* Base styles using Tailwind's @layer */
+@layer base {
+  html, body, #root {
+    height: 100%;
+    width: 100%;
+    overflow: hidden;
+  }
+
+  body {
+    font-family: var(--font-sans);
+    font-size: 13px;
+    color: var(--color-text-primary);
+    background: var(--color-bg-primary);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--color-bg-hover);
+  border-radius: 5px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-text-secondary);
+}
+
+/* Focus styles */
+:focus-visible {
+  outline: 1px solid var(--color-accent);
+  outline-offset: -1px;
+}
+
+/* Selection */
+::selection {
+  background: var(--color-accent);
+  color: white;
+}
