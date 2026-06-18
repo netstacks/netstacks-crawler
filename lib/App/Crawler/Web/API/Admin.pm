@@ -555,6 +555,10 @@ post '/api/admin/users' => require_role admin => sub {
         status 409; return to_json { error => 'user already exists' };
     }
 
+    # Authentication method: mutually-exclusive ldap/radius/tacacs flags; 'local'
+    # (the default) means password auth and clears them all. 'sso'/remote users
+    # are auto-provisioned, not created here.
+    my $auth = $args->{auth} || 'local';
     my %row = (
         username     => $username,
         fullname     => $args->{fullname},
@@ -562,9 +566,13 @@ post '/api/admin/users' => require_role admin => sub {
         admin        => ($args->{admin}        ? 1 : 0),
         port_control => ($args->{port_control} ? 1 : 0),
         active       => ((exists $args->{active} and not $args->{active}) ? 0 : 1),
+        ldap         => ($auth eq 'ldap'   ? 1 : 0),
+        radius       => ($auth eq 'radius' ? 1 : 0),
+        tacacs       => ($auth eq 'tacacs' ? 1 : 0),
     );
+    # A password only applies to local auth (ldap/radius/tacacs validate upstream).
     $row{password} = passphrase($args->{password})->generate
-        if defined $args->{password} and length $args->{password};
+        if $auth eq 'local' and defined $args->{password} and length $args->{password};
 
     my $u = $rs->create(\%row);
     status 201;
@@ -585,12 +593,33 @@ put '/api/admin/users/:username' => require_role admin => sub {
     my $args; eval { $args = decode_json(request->body || '{}'); 1 }
         or do { status 400; return to_json { error => 'invalid JSON' } };
 
+    # Guard against an admin locking everyone (or themselves) out of admin.
+    if (exists $args->{admin} and not $args->{admin} and $u->admin) {
+        my $me = session('logged_in_user') // '';
+        if (lc($me) eq lc($u->username)) {
+            status 409;
+            return to_json { error => "you can't remove your own admin role" };
+        }
+        my $admins = schema('netdisco')->resultset('User')->search({ admin => 1 })->count;
+        if ($admins <= 1) {
+            status 409;
+            return to_json { error => 'cannot remove the last administrator' };
+        }
+    }
+
     my %upd;
     $upd{fullname}     = $args->{fullname}            if exists $args->{fullname};
     $upd{note}         = $args->{note}                if exists $args->{note};
     $upd{admin}        = ($args->{admin} ? 1 : 0)        if exists $args->{admin};
     $upd{port_control} = ($args->{port_control} ? 1 : 0) if exists $args->{port_control};
     $upd{active}       = ($args->{active} ? 1 : 0)       if exists $args->{active};
+    # Authentication method: mutually-exclusive ldap/radius/tacacs (local clears them).
+    if (exists $args->{auth}) {
+        my $auth = $args->{auth} || 'local';
+        $upd{ldap}   = ($auth eq 'ldap'   ? 1 : 0);
+        $upd{radius} = ($auth eq 'radius' ? 1 : 0);
+        $upd{tacacs} = ($auth eq 'tacacs' ? 1 : 0);
+    }
     # a non-empty password resets it; explicit null/empty leaves it untouched
     $upd{password} = passphrase($args->{password})->generate
         if defined $args->{password} and length $args->{password};

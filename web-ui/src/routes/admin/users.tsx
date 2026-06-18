@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { listUsers, createUser, updateUser, deleteUser, getAuthRequired, setAuthRequired, type CrawlerUser, type UserInput } from '@/api/admin';
+import { listUsers, createUser, updateUser, deleteUser, getAuthRequired, setAuthRequired, type CrawlerUser, type UserInput, type AuthMethod } from '@/api/admin';
+import { whoami } from '@/api/auth';
 import { ShieldCheck, ShieldOff } from 'lucide-react';
 
 function AuthToggle() {
@@ -42,23 +43,31 @@ function AuthToggle() {
 export function AdminUsers() {
   const qc = useQueryClient();
   const [formOpen, setFormOpen] = useState(false);
+  const [authMethod, setAuthMethod] = useState<AuthMethod>('local');
   const [err, setErr] = useState<string | null>(null);
 
   const users = useQuery({ queryKey: ['admin-users'], queryFn: listUsers });
+  const me = useQuery({ queryKey: ['whoami'], queryFn: whoami, staleTime: 30_000 });
+  const myName = me.data?.username?.toLowerCase();
 
   const invalidate = () => qc.invalidateQueries({ queryKey: ['admin-users'] });
+  const showErr = (e: unknown, fallback: string) => setErr((e as { message?: string })?.message ?? fallback);
   const add = useMutation({
     mutationFn: (u: UserInput) => createUser(u),
-    onSuccess: () => { setFormOpen(false); setErr(null); invalidate(); },
-    onError: (e: unknown) => setErr((e as { message?: string })?.message ?? 'Create failed'),
+    onSuccess: () => { setFormOpen(false); setErr(null); setAuthMethod('local'); invalidate(); },
+    onError: (e: unknown) => showErr(e, 'Create failed'),
   });
   const upd = useMutation({
     mutationFn: ({ username, u }: { username: string; u: UserInput }) => updateUser(username, u),
-    onSuccess: invalidate,
+    onSuccess: () => { setErr(null); invalidate(); },
+    // Surface guards like "you can't remove your own admin role"; refetch to
+    // snap the checkbox back to the server's truth.
+    onError: (e: unknown) => { showErr(e, 'Update failed'); invalidate(); },
   });
   const del = useMutation({
     mutationFn: (username: string) => deleteUser(username),
-    onSuccess: invalidate,
+    onSuccess: () => { setErr(null); invalidate(); },
+    onError: (e: unknown) => showErr(e, 'Delete failed'),
   });
 
   const resetPassword = (u: CrawlerUser) => {
@@ -91,10 +100,11 @@ export function AdminUsers() {
             const fd = new FormData(e.currentTarget);
             add.mutate({
               username: String(fd.get('username') || '').trim(),
-              password: String(fd.get('password') || ''),
+              password: authMethod === 'local' ? String(fd.get('password') || '') : '',
               fullname: String(fd.get('fullname') || '').trim(),
               admin: fd.get('admin') === 'on',
               port_control: fd.get('port_control') === 'on',
+              auth: authMethod,
             });
           }}
           className="mb-4 p-3 bg-[var(--color-bg-secondary)] border border-[var(--color-border)] rounded grid grid-cols-2 gap-3 text-[13px]"
@@ -104,10 +114,24 @@ export function AdminUsers() {
             <input name="username" required autoComplete="off"
               className="mt-0.5 w-full h-8 px-2 bg-[var(--color-bg-tertiary)] border border-[var(--color-border)] rounded text-[13px]" />
           </label>
-          <label className="text-xs text-[var(--color-text-muted)]">Password
-            <input name="password" type="password" autoComplete="new-password"
-              className="mt-0.5 w-full h-8 px-2 bg-[var(--color-bg-tertiary)] border border-[var(--color-border)] rounded text-[13px]" />
+          <label className="text-xs text-[var(--color-text-muted)]">Auth method
+            <select name="auth" value={authMethod} onChange={(e) => setAuthMethod(e.target.value as AuthMethod)}
+              className="mt-0.5 w-full h-8 px-2 bg-[var(--color-bg-tertiary)] border border-[var(--color-border)] rounded text-[13px]"
+              data-testid="user-auth">
+              <option value="local">Local (password)</option>
+              <option value="ldap">LDAP</option>
+              <option value="radius">RADIUS</option>
+              <option value="tacacs">TACACS+</option>
+            </select>
           </label>
+          {authMethod === 'local' ? (
+            <label className="text-xs text-[var(--color-text-muted)]">Password
+              <input name="password" type="password" autoComplete="new-password"
+                className="mt-0.5 w-full h-8 px-2 bg-[var(--color-bg-tertiary)] border border-[var(--color-border)] rounded text-[13px]" />
+            </label>
+          ) : (
+            <div className="text-xs text-[var(--color-text-muted)] self-end pb-1.5">Password is validated by the {authMethod.toUpperCase()} server.</div>
+          )}
           <label className="text-xs text-[var(--color-text-muted)] col-span-2">Full name
             <input name="fullname"
               className="mt-0.5 w-full h-8 px-2 bg-[var(--color-bg-tertiary)] border border-[var(--color-border)] rounded text-[13px]" />
@@ -149,7 +173,10 @@ export function AdminUsers() {
                 <span className="text-[11px] text-[var(--color-text-muted)]">{u.source}{u.source === 'local' && !u.has_password ? ' (no pw)' : ''}</span>
               </td>
               <td className="px-3 py-1.5">
-                <input type="checkbox" checked={u.admin} onChange={(e) => upd.mutate({ username: u.username, u: { admin: e.target.checked } })}
+                <input type="checkbox" checked={u.admin}
+                  disabled={u.username.toLowerCase() === myName}
+                  title={u.username.toLowerCase() === myName ? "You can't change your own admin role" : undefined}
+                  onChange={(e) => upd.mutate({ username: u.username, u: { admin: e.target.checked } })}
                   data-testid={`user-admin-${u.username}`} />
               </td>
               <td className="px-3 py-1.5">

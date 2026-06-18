@@ -120,6 +120,8 @@ export const CrawlerUser = z.object({
 });
 export type CrawlerUser = z.infer<typeof CrawlerUser>;
 
+export type AuthMethod = 'local' | 'ldap' | 'radius' | 'tacacs';
+
 export interface UserInput {
   username?: string;
   password?: string;
@@ -128,6 +130,7 @@ export interface UserInput {
   admin?: boolean;
   port_control?: boolean;
   active?: boolean;
+  auth?: AuthMethod;
 }
 
 export async function listUsers(): Promise<CrawlerUser[]> {
