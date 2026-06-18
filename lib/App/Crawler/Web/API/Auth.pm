@@ -8,6 +8,7 @@ use Dancer::Plugin::Swagger;
 use Dancer::Plugin::DBIC;
 use Dancer::Plugin::Auth::Extensible;
 use JSON::PP qw(decode_json);
+use App::Crawler::Util::Web 'ensure_remote_user';
 
 # Session-based login for the SPA. nginx only proxies /api/*, so the legacy
 # /login (which also mints an expiring API token) isn't reachable from the UI.
@@ -129,6 +130,12 @@ get '/api/auth/whoami' => sub {
     unless ($who) {
         return to_json { authenticated => \0 };
     }
+
+    # whoami is exempt from the before-hook, so a whoami-first request must
+    # provision the SSO user here too, otherwise _roles_for finds no row and
+    # returns no roles.
+    ensure_remote_user($who) if $source eq 'remote';
+
     return to_json {
       authenticated => \1,
       username      => $who,

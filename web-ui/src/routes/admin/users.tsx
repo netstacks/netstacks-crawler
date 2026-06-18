@@ -71,7 +71,9 @@ export function AdminUsers() {
       <AuthToggle />
       <div className="flex items-center gap-2 mb-3">
         <p className="text-xs text-[var(--color-text-muted)]">
-          Local accounts for username/password login and as owners of API keys. External (SSO/proxy) users don't need an entry unless you want to grant them admin.
+          Local accounts for username/password login and as owners of API keys. SSO/proxy users
+          (<span className="font-mono">sso</span> source) are added automatically on first sign-in with read-only
+          access — grant them Admin or Port&nbsp;control here.
         </p>
         <button onClick={() => { setErr(null); setFormOpen((v) => !v); }}
           className="ml-auto h-8 px-3 text-xs bg-[var(--color-button-primary)] hover:bg-[var(--color-button-primary-hover)] text-white rounded"
@@ -159,7 +161,9 @@ export function AdminUsers() {
               </td>
               <td className="px-3 py-1.5 text-xs text-[var(--color-text-muted)]">{u.last_on ?? '—'}</td>
               <td className="px-3 py-1.5 whitespace-nowrap text-right">
-                <button onClick={() => resetPassword(u)} className="text-xs text-[var(--color-text-accent)] hover:underline mr-3">Set password</button>
+                {u.source !== 'sso' && (
+                  <button onClick={() => resetPassword(u)} className="text-xs text-[var(--color-text-accent)] hover:underline mr-3">Set password</button>
+                )}
                 {u.builtin
                   ? <span className="text-xs text-[var(--color-text-muted)]" title="The built-in admin can be disabled but not deleted">protected</span>
                   : <button onClick={() => { if (window.confirm(`Delete user ${u.username}? This also revokes their API keys.`)) del.mutate(u.username); }}

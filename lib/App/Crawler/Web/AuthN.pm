@@ -6,7 +6,7 @@ use Dancer::Plugin::Auth::Extensible;
 use Dancer::Plugin::Swagger;
 
 use App::Crawler; # a safe noop but needed for standalone testing
-use App::Crawler::Util::Web 'request_is_api';
+use App::Crawler::Util::Web qw/request_is_api ensure_remote_user/;
 use MIME::Base64;
 use URI::Based;
 
@@ -123,6 +123,11 @@ hook 'before' => sub {
         }
     }
     elsif ($delegated and not (defined $delegated->active and not $delegated->active)) {
+        # Persist the SSO/remote identity as a real row (read-only by default)
+        # so it gains the `api` role and is manageable under Admin → Users. A
+        # synthesized in-memory user has no DB row and therefore no roles.
+        ensure_remote_user($delegated->username)
+          if not $delegated->in_storage;
         session(logged_in_user => $delegated->username);
         session(logged_in_user_realm => 'users');
     }

@@ -508,7 +508,7 @@ get '/api/admin/workers' => require_role admin => sub {
 sub _user_public {
     my $u = shift;
     my $source = $u->ldap ? 'ldap' : $u->radius ? 'radius'
-               : $u->tacacs ? 'tacacs' : 'local';
+               : $u->tacacs ? 'tacacs' : $u->remote ? 'sso' : 'local';
     return {
         username     => $u->username,
         fullname     => ($u->fullname // ''),

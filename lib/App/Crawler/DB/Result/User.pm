@@ -35,6 +35,8 @@ __PACKAGE__->add_columns(
   { data_type => "boolean", default_value => \"false", is_nullable => 1 },
   "tacacs",
   { data_type => "boolean", default_value => \"false", is_nullable => 1 },
+  "remote",
+  { data_type => "boolean", default_value => \"false", is_nullable => 1 },
   "admin",
   { data_type => "boolean", default_value => \"false", is_nullable => 1 },
   "active",

@@ -47,17 +47,14 @@ unless ($got) {
 }
 
 eval {
-    # If schema appears uninitialized, run deploy.
-    my ($exists) = $dbh->selectrow_array(
-        "SELECT 1 FROM information_schema.tables WHERE table_name = 'device' LIMIT 1"
-    );
-    if (!$exists) {
-        warn "[bootstrap] running crawler-db-deploy\n";
-        system('crawler-db-deploy') == 0
-            or die "crawler-db-deploy failed: $?";
-    } else {
-        warn "[bootstrap] schema present, skipping deploy\n";
-    }
+    # crawler-db-deploy is idempotent: it deploys a fresh schema, applies any
+    # pending version upgrades one step at a time, or no-ops when already in
+    # sync. Always run it (under the advisory lock above) so a schema bump
+    # shipped in a new image is applied automatically on restart, not just on
+    # first install.
+    warn "[bootstrap] running crawler-db-deploy\n";
+    system('crawler-db-deploy') == 0
+        or die "crawler-db-deploy failed: $?";
 };
 my $err = $@;
 

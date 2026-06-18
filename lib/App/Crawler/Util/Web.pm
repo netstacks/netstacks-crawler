@@ -4,9 +4,11 @@ use strict;
 use warnings;
 
 use Dancer ':syntax';
+use Dancer::Plugin::DBIC;
 
 use Time::Piece;
 use Time::Seconds;
+use Try::Tiny;
 
 use base 'Exporter';
 our @EXPORT = ();
@@ -18,6 +20,7 @@ our @EXPORT_OK = qw/
   request_is_api
   request_is_api_report
   request_is_api_search
+  ensure_remote_user
 /;
 our %EXPORT_TAGS = (all => \@EXPORT_OK);
 
@@ -93,6 +96,36 @@ sub request_is_api_search {
     (param('return_url')
     and index(param('return_url'), uri_for('/api/v1/search/')->path) == 0)
   ));
+}
+
+=head2 ensure_remote_user( $username )
+
+Find-or-create the C<users> row for a verified SSO / reverse-proxy identity
+(C<X-Remote-User>). New rows are marked C<remote> and C<active> with no password
+and no admin/port_control flags, so the user is read-only (the C<api> role is
+granted to any existing row when C<trust_x_remote_user> is on) until an admin
+elevates them. Call this ONLY for header-derived identities — never for the
+C<no_auth> guest or failed local logins. Returns the user row (existing or new).
+
+=cut
+
+sub ensure_remote_user {
+  my $username = shift;
+  return unless defined $username and length $username;
+
+  my $rs = schema('netdisco')->resultset('User');
+  my $found = $rs->find({ username => { -ilike => quotemeta($username) } });
+  return $found if $found;
+
+  # Two concurrent first requests can race to create the row; on failure
+  # (e.g. unique violation) just re-find the winner's row.
+  my $created = try {
+    $rs->create({ username => $username, remote => 1, active => 1 });
+  } catch {
+    undef;
+  };
+  return $created
+    || $rs->find({ username => { -ilike => quotemeta($username) } });
 }
 
 =head2 sql_match( $value, $exact? )
