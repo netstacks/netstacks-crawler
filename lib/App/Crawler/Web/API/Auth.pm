@@ -106,6 +106,20 @@ swagger_path {
     tags        => ['auth'],
     responses   => { default => {} },
 },
+swagger_path {
+    description => 'Public branding (application name) for unauthenticated pages like login',
+    tags        => ['auth'],
+    responses   => { default => {} },
+},
+get '/api/auth/branding' => sub {
+    content_type 'application/json';
+    # Exempt from the auth hook (path under /api/auth/), so the login page can
+    # read the configured name before anyone is signed in.
+    return to_json {
+      application_name => (setting('application_name') || 'NetStacks Crawler'),
+    };
+};
+
 get '/api/auth/whoami' => sub {
     content_type 'application/json';
 
