@@ -4,11 +4,13 @@ import { DataTable } from '@/components/common/data-table';
 import type { AddressRow } from '@/api/types';
 import type { ColumnDef } from '@tanstack/react-table';
 
+// On a device's own Addresses tab every row's `ip` is this device's management
+// IP (redundant), while `alias` holds the actual address configured on the
+// interface. Show `alias` as the Address; the repeated device IP is dropped.
 const cols: ColumnDef<AddressRow>[] = [
-  { accessorKey: 'ip',     header: 'Address' },
+  { accessorKey: 'alias',  header: 'Address' },
   { accessorKey: 'dns',    header: 'DNS' },
   { accessorKey: 'port',   header: 'Interface' },
-  { accessorKey: 'alias',  header: 'Description' },
   { accessorKey: 'subnet', header: 'Prefix' },
 ];
 

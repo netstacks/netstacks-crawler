@@ -53,6 +53,7 @@ export const DeviceDetails = Device.extend({
     nodes: z.number(),
     vlans: z.number(),
     modules: z.number(),
+    addresses: z.number().optional(),
   }),
 });
 export type DeviceDetails = z.infer<typeof DeviceDetails>;

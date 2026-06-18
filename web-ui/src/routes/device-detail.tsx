@@ -9,7 +9,7 @@ const tabs = [
   { to: 'details',   label: 'Details' },
   { to: 'ports',     label: 'Ports', countKey: 'ports' as const },
   { to: 'nodes',     label: 'Nodes', countKey: 'nodes' as const },
-  { to: 'addresses', label: 'Addresses' },
+  { to: 'addresses', label: 'Addresses', countKey: 'addresses' as const },
   { to: 'neighbors', label: 'Neighbors', countKey: 'neighbors' as const },
   { to: 'vlans',     label: 'VLANs', countKey: 'vlans' as const },
   { to: 'modules',   label: 'Modules', countKey: 'modules' as const },

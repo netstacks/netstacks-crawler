@@ -23,6 +23,7 @@ get '/api/device/:ip/details' => require_role api => sub {
     my $ports_count   = $dev->ports->count;
     my $vlans_count   = eval { $dev->vlans->count } // 0;
     my $modules_count = eval { $dev->modules->count } // 0;
+    my $address_count = eval { $dev->device_ips->count } // 0;
     my $nodes_count   = schema('netdisco')
         ->resultset('Node')->search({ switch => $dev->ip })->count;
 
@@ -50,10 +51,11 @@ get '/api/device/:ip/details' => require_role api => sub {
     return to_json {
         %base,
         counts => {
-            ports   => $ports_count,
-            nodes   => $nodes_count,
-            vlans   => $vlans_count,
-            modules => $modules_count,
+            ports     => $ports_count,
+            nodes     => $nodes_count,
+            vlans     => $vlans_count,
+            modules   => $modules_count,
+            addresses => $address_count,
         },
     };
 };
