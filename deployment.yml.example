@@ -1,0 +1,34 @@
+# NetStacks Crawler — backend site config template.
+#
+#   cp deployment.yml.example deployment.yml
+#
+# Then bind-mount the real file into the backend + worker containers at
+# /etc/crawler/deployment.yml (see README → Configuration). The real
+# `deployment.yml` is git-ignored so your site details stay out of version
+# control. Any key from share/config.yml may be overridden here.
+
+# DNS suffix appended to short device names during discovery.
+domain_suffix: .example.com
+
+# Cap discovery worker fan-out. The shipped default scales to CPU count, which
+# can exhaust Postgres connections on big hosts. A handful is plenty for most.
+workers:
+  tasks: 8
+
+# ---- Authentication -------------------------------------------------------
+# These mirror the shipped defaults; uncomment to pin them in config instead of
+# toggling from the UI. Remember the UI/database toggle overrides these at
+# runtime (see README → Authentication & SSO).
+#
+# Trust the X-Remote-User header set by your SSO perimeter / reverse proxy.
+# trust_x_remote_user: true
+# Don't require the proxied user to pre-exist in the local user table.
+# validate_remote_user: false
+# Bootstrap value for whether auth is disabled (open mode). The Admin → Users
+# toggle writes a database override that takes precedence over this.
+# no_auth: false
+
+# SNMP read-only community/communities. Prefer setting this in the UI
+# (Admin → SNMP Auth) so it isn't stored on disk.
+# community:
+#   - public

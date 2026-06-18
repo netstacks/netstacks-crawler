@@ -7,7 +7,9 @@ RUN npm run build -- --outDir /spa
 
 FROM nginx:stable
 COPY --from=spa-build /spa /usr/share/nginx/html
+COPY nginx-main.conf /etc/nginx/nginx.conf
 COPY nginx.conf /etc/nginx/conf.d/default.conf
+COPY alb-auth.js /etc/nginx/njs/alb-auth.js
 
 EXPOSE 5000
 
