@@ -1,4 +1,5 @@
-import { NavLink, Outlet } from 'react-router';
+import { NavLink, Outlet, Navigate } from 'react-router';
+import { useIsAdmin } from '@/hooks/use-whoami';
 
 const tabs = [
   { to: '/admin/actions',   label: 'Actions' },
@@ -12,6 +13,13 @@ const tabs = [
 ];
 
 export function AdminShell() {
+  const { isAdmin, resolved } = useIsAdmin();
+
+  // Non-admins have no business here. Wait until whoami resolves to avoid a
+  // flash, then bounce them out. (The API also enforces this on every call.)
+  if (!resolved) return null;
+  if (!isAdmin) return <Navigate to="/dashboard" replace />;
+
   return (
     <div className="p-6">
       <h1 className="text-xl font-semibold mb-1">Admin & Settings</h1>
