@@ -73,22 +73,23 @@ hook 'before' => sub {
       or (setting('metrics_path') and request->path eq uri_for(setting('metrics_path'))->path)
     );
 
-    # A presented API credential (Authorization header) is authoritative, so
-    # drop any ambient cookie to stop it shadowing token/key auth. But the SPA
-    # *is* the UI and authenticates /api/* via a session cookie after a local
-    # login — so only destroy when a credential is actually being passed.
-    session->destroy if (request_is_api and request->header('Authorization'));
-
-    # ...otherwise, we can short circuit if Dancer reads its cookie OK
-    return if session('logged_in_user');
-
     # Any request under /api/ (minus the exemptions returned above) is API
     # traffic and must be credential-gated: an API key, or a verified SSO
     # identity for the SPA. The no_auth open-mode guest is never handed API
     # access, so the API stays controlled by the API-keys admin UI regardless
-    # of the no_auth toggle. (Path-based, not request_is_api, so a client that
-    # omits the JSON Accept header can't slip past into guest access.)
+    # of the no_auth toggle. Path-based (not request_is_api / the JSON Accept
+    # header) so a plain `Authorization` header authenticates on its own and a
+    # client can't slip past into guest access by omitting Accept.
     my $is_api = (index(request->path, uri_for('/api/')->path) == 0);
+
+    # A presented API credential (Authorization header) is authoritative, so
+    # drop any ambient cookie to stop it shadowing token/key auth. But the SPA
+    # *is* the UI and authenticates /api/* via a session cookie after a local
+    # login — so only destroy when a credential is actually being passed.
+    session->destroy if ($is_api and request->header('Authorization'));
+
+    # ...otherwise, we can short circuit if Dancer reads its cookie OK
+    return if session('logged_in_user');
 
     my $delegated = _get_delegated_authn_user(no_guest => $is_api);
 
@@ -97,7 +98,7 @@ hook 'before' => sub {
     # header" guard would shadow credential auth. Check static, non-expiring API
     # keys first, then fall back to the legacy (expiring) login token. Both
     # mechanisms coexist.
-    if (request_is_api and request->header('Authorization')) {
+    if ($is_api and request->header('Authorization')) {
         my $provider = Dancer::Plugin::Auth::Extensible::auth_provider('users');
         my $hdr = request->header('Authorization');
         (my $bare = $hdr) =~ s/^(?:Apikey|Bearer)\s+//i;
