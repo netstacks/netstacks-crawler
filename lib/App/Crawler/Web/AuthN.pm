@@ -20,6 +20,7 @@ hook 'before' => sub {
 # try to find a valid username according to headers
 # or configuration settings
 sub _get_delegated_authn_user {
+  my (%opt) = @_;
   my $username = undef;
 
   if (setting('trust_x_remote_user')
@@ -34,8 +35,12 @@ sub _get_delegated_authn_user {
 
       ($username = $ENV{REMOTE_USER}) =~ s/@[^@]*$//;
   }
-  # this works for API calls, too
-  elsif (setting('no_auth')) {
+  # The no_auth "open mode" guest applies ONLY to the browser UI. API requests
+  # (/api/*) are always credential-gated — a valid API key, or a verified SSO
+  # identity for the SPA — so callers pass no_guest => 1 for API paths. This
+  # keeps the API controlled by the API-keys admin UI even when authentication
+  # is turned off in settings.
+  elsif (setting('no_auth') and not $opt{no_guest}) {
       $username = 'guest';
   }
 
@@ -59,6 +64,9 @@ hook 'before' => sub {
       or request->path eq uri_for('/logout')->path
       or request->path eq uri_for('/swagger.json')->path
       or index(request->path, uri_for('/swagger-ui')->path) == 0
+      # Public API docs: curated spec + browsable UI, intentionally credential-free
+      or request->path eq uri_for('/api/openapi.json')->path
+      or index(request->path, uri_for('/api/docs')->path) == 0
       # SPA session login/logout/whoami manage their own auth; don't gate them
       or index(request->path, uri_for('/api/auth/')->path) == 0
       or (setting('health_path')  and request->path eq uri_for(setting('health_path'))->path)
@@ -74,7 +82,15 @@ hook 'before' => sub {
     # ...otherwise, we can short circuit if Dancer reads its cookie OK
     return if session('logged_in_user');
 
-    my $delegated = _get_delegated_authn_user();
+    # Any request under /api/ (minus the exemptions returned above) is API
+    # traffic and must be credential-gated: an API key, or a verified SSO
+    # identity for the SPA. The no_auth open-mode guest is never handed API
+    # access, so the API stays controlled by the API-keys admin UI regardless
+    # of the no_auth toggle. (Path-based, not request_is_api, so a client that
+    # omits the JSON Accept header can't slip past into guest access.)
+    my $is_api = (index(request->path, uri_for('/api/')->path) == 0);
+
+    my $delegated = _get_delegated_authn_user(no_guest => $is_api);
 
     # An explicit API credential always wins, ahead of the delegated
     # (X-Remote-User) handling below — otherwise the "delegated configured but no
@@ -144,9 +160,10 @@ hook 'before' => sub {
     # API clients (curl, swagger-ui, scripts) must get a clean 401 when
     # unauthenticated — never a 302 redirect to the login page, which a client
     # follows to a 200 HTML page and mistakes for success. This pre-empts both
-    # require_role's redirect and the SPA reroute above. Only fires when there's
-    # genuinely no identity (in open/no_auth mode a guest session is always set).
-    if (request_is_api and not session('logged_in_user')) {
+    # require_role's redirect and the SPA reroute above. Path-based on /api/ (as
+    # well as request_is_api) so an API caller without the JSON Accept header
+    # still gets 401, and so the no_auth guest can never reach an API route.
+    if (($is_api or request_is_api) and not session('logged_in_user')) {
         status 401;
         header('Content-Type' => 'application/json');
         halt(to_json({ error => 'authentication required' }));

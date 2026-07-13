@@ -137,6 +137,7 @@ BEGIN {
         API::Queue
         API::Import
         API::Auth
+        API::PublicDocs
         SettingsApply
         AuthN
         Health
@@ -216,7 +217,10 @@ hook 'after' => sub {
         header('Content-Type' => 'application/json');
     }
 
-    if (request_is_api) {
+    # The public docs UI (/api/docs + its assets) lives under /api/ but serves
+    # HTML/JS/CSS, so it must not be JSON-forced like the data endpoints.
+    if (request_is_api
+        and index(request->path, uri_for('/api/docs')->path) != 0) {
         header('Content-Type' => 'application/json');
         $r->content( $r->content || '[]' );
     }

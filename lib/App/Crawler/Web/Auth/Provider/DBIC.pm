@@ -97,10 +97,13 @@ sub get_user_roles {
     my $roles       = $settings->{roles_relationship} || 'roles';
     my $role_column = $settings->{role_column}        || 'role';
 
-    # With no_auth enabled, the user is synthesized in-memory (new_result) and
-    # has no database row, so the role relationship JOIN returns nothing. Grant
-    # all roles unconditionally.
-    if (setting('no_auth')) {
+    # With no_auth enabled, the browser-UI "open mode" guest is synthesized
+    # in-memory (new_result) with no database row, so the role JOIN returns
+    # nothing — grant it all roles so the open UI works. But a user who
+    # authenticated with a REAL credential (an API key, or a provisioned SSO
+    # identity) has a database row: fall through to their assigned roles, so API
+    # access stays governed by the API key's roles even when auth is turned off.
+    if (setting('no_auth') and not $user->in_storage) {
         return [qw/ admin api port_control api_admin /];
     }
 
