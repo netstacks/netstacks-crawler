@@ -9,7 +9,7 @@ Makefile*
 *.swp
 *.pid
 test.pl
-
+.env
 # -- Editor / IDE --
 .idea/
 .vscode/
