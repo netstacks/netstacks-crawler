@@ -112,6 +112,11 @@ hook 'before' => sub {
                 eval { $key->update({ last_used => \'LOCALTIMESTAMP' }) };
                 session(logged_in_user => $key->username);
                 session(logged_in_user_realm => 'users');
+                # Key/token auth is stateless: mark the session to be torn down
+                # after the response so no dancer.session cookie persists and
+                # authorizes later cookie-only calls. (The SPA's cookie/SSO
+                # session is unaffected — it never sets this flag.)
+                var stateless_auth => 1;
                 return;
             }
             # owner disabled — ignore the key, fall through
@@ -120,6 +125,7 @@ hook 'before' => sub {
         if (my $user = $provider->validate_api_token($hdr)) {
             session(logged_in_user => $user->username);
             session(logged_in_user_realm => 'users');
+            var stateless_auth => 1;
             return;
         }
         # invalid credential: fall through — a delegated header may still apply,

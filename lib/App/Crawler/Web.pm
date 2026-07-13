@@ -163,6 +163,18 @@ if (!setting('session_cookie_key')
 }
 Dancer::Session::Cookie::init(session);
 
+# API-key/token auth is stateless. The cookie-session engine queues a
+# dancer.session cookie from the logged-in session in its own `after` hook;
+# registered here (after that engine hook), this strips that queued cookie when
+# the credential branch flagged the request, so key auth never mints a bearer
+# cookie that could authorize a later no-key call. The SPA's cookie/SSO session
+# never sets the flag, so it is untouched.
+hook 'after' => sub {
+    my $response = shift;
+    return unless vars->{stateless_auth};
+    delete $response->{_cookies}->{ setting('session_name') || 'dancer.session' };
+};
+
 # Tenant routing table — used by the multi-tenant /t/<tag>/... URL prefix.
 {
     set('tenant_data' => {
